@@ -1,0 +1,5 @@
+streamlit[pdf]>=1.49.0
+pandas
+plotly
+reportlab
+gspread>=6.1.2
