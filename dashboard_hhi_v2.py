@@ -34,6 +34,21 @@ except Exception:
 DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/1yvdxDE1lnHAjEJQZlqYZqYlBa_ZjCz1k/edit?usp=sharing&ouid=104405218548143620607&rtpof=true&sd=true"
 KAI_LOGO_URL = "https://images.seeklogo.com/logo-png/40/2/pt-kai-kereta-api-indonesia-2020-logo-png_seeklogo-407558.png"
 
+
+def _get_sheet_url() -> str:
+    """Resolve the configured spreadsheet URL used for reading and writing."""
+    secret_url = st.secrets.get("GOOGLE_SHEETS_URL") if "GOOGLE_SHEETS_URL" in st.secrets else None
+    connections = st.secrets.get("connections", {})
+    gsheets = connections.get("gsheets", {}) if hasattr(connections, "get") else {}
+    configured_url = gsheets.get("spreadsheet") if hasattr(gsheets, "get") else None
+    return (
+        os.environ.get("GOOGLE_SHEETS_URL")
+        or secret_url
+        or configured_url
+        or DEFAULT_SHEET_URL
+    )
+
+
 KAI_NAVY = "#2D2A70"
 KAI_ORANGE = "#E46A00"
 KAI_SLATE = "#5E6A7D"
@@ -761,11 +776,7 @@ def _show_law_document_dialog() -> None:
 
 @st.cache_data(ttl=300)
 def load_law_sheet(sheet_name: str) -> tuple[pd.DataFrame, str | None]:
-    sheet_url = (
-        os.environ.get("GOOGLE_SHEETS_URL")
-        or (st.secrets.get("GOOGLE_SHEETS_URL") if "GOOGLE_SHEETS_URL" in st.secrets else None)
-        or DEFAULT_SHEET_URL
-    )
+    sheet_url = _get_sheet_url()
     match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", sheet_url or "")
     if not match:
         return pd.DataFrame(), "URL Google Sheets tidak valid atau belum dikonfigurasi."
@@ -1144,11 +1155,7 @@ def load_data():
     """
 
     # Resolve spreadsheet URL / id
-    sheet_url = (
-        os.environ.get("GOOGLE_SHEETS_URL")
-        or (st.secrets.get("GOOGLE_SHEETS_URL") if "GOOGLE_SHEETS_URL" in st.secrets else None)
-        or DEFAULT_SHEET_URL
-    )
+    sheet_url = _get_sheet_url()
     if not sheet_url:
         st.error("Google Sheets URL not configured. Set `GOOGLE_SHEETS_URL` in Streamlit secrets or environment.")
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
@@ -1203,20 +1210,41 @@ def _append_strategic_activity(row: dict[str, object]) -> None:
 
     import gspread
 
-    sheet_url = (
-        os.environ.get("GOOGLE_SHEETS_URL")
-        or (st.secrets.get("GOOGLE_SHEETS_URL") if "GOOGLE_SHEETS_URL" in st.secrets else None)
-        or DEFAULT_SHEET_URL
-    )
+    sheet_url = _get_sheet_url()
     match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", sheet_url or "")
     if not match:
         raise ValueError("URL Google Sheets tidak valid.")
 
     client = gspread.service_account_from_dict(dict(credentials))
-    worksheet = client.open_by_key(match.group(1)).worksheet("Update Monev Strategis")
-    headers = worksheet.row_values(1)
-    if not headers:
-        raise ValueError("Header pada worksheet Update Monev Strategis tidak ditemukan.")
+    try:
+        spreadsheet = client.open_by_key(match.group(1))
+    except gspread.exceptions.APIError as exc:
+        message = str(exc)
+        if "must not be an Office file" in message:
+            raise ValueError(
+                "File pada URL tersebut adalah file Excel/Office. "
+                "Buka file di Google Drive, pilih File > Simpan sebagai Google Spreadsheet, "
+                "lalu ganti GOOGLE_SHEETS_URL di Streamlit secrets dengan URL spreadsheet baru."
+            ) from exc
+        raise
+
+    worksheet = spreadsheet.worksheet("Update Monev Strategis")
+    all_values = worksheet.get_all_values()
+    header_index = next(
+        (
+            index
+            for index, values in enumerate(all_values)
+            if "NO" in {str(value).strip().upper() for value in values}
+            and "KEGIATAN" in {str(value).strip().upper() for value in values}
+        ),
+        None,
+    )
+    if header_index is None:
+        raise ValueError(
+            "Header pada worksheet Update Monev Strategis tidak ditemukan. "
+            "Pastikan satu baris header memiliki kolom NO dan KEGIATAN."
+        )
+    headers = all_values[header_index]
 
     worksheet.append_row(
         [row.get(header.strip(), "") if header.strip() else "" for header in headers],
