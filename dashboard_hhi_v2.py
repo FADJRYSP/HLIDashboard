@@ -16,10 +16,17 @@ from datetime import datetime
 import os
 import re
 import html as html_lib
+import hashlib
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 from io import BytesIO
 import textwrap
+from typing import Protocol
+
+
+class _UploadedDocument(Protocol):
+    def getbuffer(self) -> memoryview:
+        ...
 
 # reportlab is an optional dependency; fall back to text download if missing
 try:
@@ -728,10 +735,14 @@ LAW_TITLE_PREFIXES = (
     "undang-undang",
     "undang undang",
     "uu no.",
+    "uu nomor",
     "peraturan",
     "perpres",
+    "perpres nomor",
     "pp no.",
+    "pp nomor",
     "pm no.",
+    "pm nomor",
     "permen",
     "kepmen",
     "keputusan",
@@ -741,16 +752,231 @@ UU_23_2007_DOCUMENT = os.path.join(
     "static",
     "uu_23_2007_perkeretaapian.pdf",
 )
+LEGAL_DOCUMENT_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "static",
+    "legal_documents",
+)
 UU_23_2007_TITLE_PATTERN = re.compile(
     r"^(?:undang[\s-]+undang|uu)\b.*\b(?:nomor|no\.?)\s*23\b.*\b2007\b",
     flags=re.IGNORECASE,
 )
 
 
+def _law_document_filename(section_name: str, law_title: str) -> str:
+    title_hash = hashlib.sha256(
+        f"{section_name}\0{law_title}".casefold().encode("utf-8")
+    ).hexdigest()[:12]
+    return f"law_{title_hash}"
+
+
+def _legacy_law_document_filename(section_name: str, law_title: str) -> str:
+    return re.sub(
+        r"[^a-z0-9]+",
+        "_",
+        f"{section_name}_{law_title}".casefold(),
+    ).strip("_")
+
+
 def _get_law_document_path(section_name: str, law_title: str) -> str | None:
+    filenames = [_law_document_filename(section_name, law_title)]
+    legacy_filename = _legacy_law_document_filename(section_name, law_title)
+    if legacy_filename != filenames[0]:
+        filenames.append(legacy_filename)
+    for filename in filenames:
+        uploaded_document = os.path.join(LEGAL_DOCUMENT_DIR, f"{filename}.pdf")
+        if os.path.isfile(uploaded_document):
+            return uploaded_document
     if UU_23_2007_TITLE_PATTERN.search(law_title):
         return UU_23_2007_DOCUMENT
     return None
+
+
+def _save_law_document(
+    section_name: str,
+    law_title: str,
+    document: _UploadedDocument,
+) -> str:
+    safe_title = _law_document_filename(section_name, law_title)
+    if not safe_title:
+        raise ValueError("Nama peraturan tidak dapat digunakan sebagai nama file.")
+
+    document_path = os.path.join(LEGAL_DOCUMENT_DIR, f"{safe_title}.pdf")
+    if os.path.exists(document_path):
+        raise FileExistsError("Dokumen untuk peraturan ini sudah tersedia.")
+
+    document_bytes = document.getbuffer()
+    if not document_bytes:
+        raise ValueError("File PDF kosong.")
+
+    os.makedirs(LEGAL_DOCUMENT_DIR, exist_ok=True)
+    try:
+        with open(document_path, "wb") as document_file:
+            document_file.write(document_bytes)
+    except OSError as exc:
+        raise OSError(f"Dokumen tidak dapat disimpan: {exc}") from exc
+    return document_path
+
+
+def _append_legal_regulation(
+    section_name: str,
+    law_title: str,
+    article_entries: list[tuple[str, str]],
+) -> None:
+    credentials = st.secrets.get("gcp_service_account") if "gcp_service_account" in st.secrets else None
+    if not credentials:
+        raise ValueError(
+            "Kredensial tulis belum dikonfigurasi. Tambahkan [gcp_service_account] "
+            "di Streamlit secrets dan beri akun tersebut akses Editor ke spreadsheet."
+        )
+
+    import gspread
+
+    sheet_url = _get_sheet_url()
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", sheet_url or "")
+    if not match:
+        raise ValueError("URL Google Sheets tidak valid.")
+
+    client = gspread.service_account_from_dict(dict(credentials))
+    spreadsheet = client.open_by_key(match.group(1))
+    worksheet = spreadsheet.worksheet(LEGAL_SHEETS[section_name])
+    existing_values = worksheet.get_all_values()
+    existing_titles = {
+        str(row[0]).strip().casefold()
+        for row in existing_values
+        if row and str(row[0]).strip()
+    }
+    if law_title.casefold() in existing_titles:
+        raise ValueError("Nama hukum/peraturan tersebut sudah ada di worksheet.")
+
+    if not article_entries:
+        raise ValueError("Tambahkan minimal satu Pasal dan ringkasan/isi.")
+
+    column_count = max(
+        len(article_entries) + 1,
+        max((len(row) for row in existing_values), default=1),
+    )
+    article_header_row = [""] * column_count
+    article_content_row = [""] * column_count
+    article_content_row[0] = law_title
+    for index, (article_title, article_summary) in enumerate(article_entries, start=1):
+        article_header_row[index] = article_title
+        article_content_row[index] = article_summary
+    end_column = ""
+    column_number = column_count
+    while column_number:
+        column_number, remainder = divmod(column_number - 1, 26)
+        end_column = chr(65 + remainder) + end_column
+    start_row = len(existing_values) + 1
+    worksheet.update(
+        range_name=f"A{start_row}:{end_column}{start_row + 1}",
+        values=[article_header_row, article_content_row],
+        value_input_option="USER_ENTERED",
+    )
+
+
+@st.dialog("Tambah Dasar Hukum / Peraturan", width="large")
+def _show_add_legal_data_dialog() -> None:
+    section_name = st.selectbox("Kelompok peraturan", list(LEGAL_SHEETS))
+
+    with st.form("add_legal_data_form"):
+        st.caption("Isi data peraturan dan unggah dokumen PDF-nya.")
+        law_title = st.text_input(
+            "Nama hukum/peraturan",
+            placeholder="Contoh: Peraturan Menteri Perhubungan Nomor ...",
+        )
+        article_count = st.number_input(
+            "Jumlah Pasal",
+            min_value=1,
+            max_value=30,
+            value=1,
+            step=1,
+            help="Setiap Pasal akan dibuat sebagai kolom tersendiri di baris header spreadsheet.",
+        )
+        article_entries: list[tuple[str, str]] = []
+        st.markdown("**Pasal dan Ringkasan/Isi**")
+        st.caption(
+            "Pasal menjadi header kolom, sedangkan ringkasan/isi menjadi isi pada kolom tersebut."
+        )
+        for index in range(int(article_count)):
+            pasal_column, summary_column = st.columns([1, 3])
+            with pasal_column:
+                article_title = st.text_input(
+                    "Pasal",
+                    placeholder="Pasal 1",
+                    key=f"new_law_article_title_{section_name}_{index}",
+                )
+            with summary_column:
+                article_summary = st.text_area(
+                    "Ringkasan/Isi Pasal",
+                    height=100,
+                    key=f"new_law_article_summary_{section_name}_{index}",
+                )
+            article_title = article_title.strip()
+            if article_title and re.fullmatch(r"\d+[a-z]?", article_title, flags=re.IGNORECASE):
+                article_title = f"Pasal {article_title}"
+            article_entries.append((article_title, article_summary.strip()))
+        document = st.file_uploader(
+            "Dokumen PDF (opsional)",
+            type=["pdf"],
+            accept_multiple_files=False,
+        )
+        submitted = st.form_submit_button(
+            "Simpan Dasar Hukum",
+            type="primary",
+            use_container_width=True,
+        )
+
+    if not submitted:
+        return
+
+    law_title = law_title.strip()
+    if not law_title:
+        st.error("Nama hukum/peraturan wajib diisi.")
+        return
+    if not law_title.casefold().startswith(LAW_TITLE_PREFIXES):
+        st.error(
+            "Nama hukum/peraturan harus diawali salah satu format: "
+            + ", ".join(LAW_TITLE_PREFIXES)
+            + "."
+        )
+        return
+    invalid_entries = [
+        index + 1
+        for index, (article_title, article_summary) in enumerate(article_entries)
+        if not article_title or not article_summary
+    ]
+    if invalid_entries:
+        st.error(
+            "Lengkapi Pasal dan Ringkasan/Isi pada baris: "
+            + ", ".join(str(index) for index in invalid_entries)
+        )
+        return
+    try:
+        document_path = None
+        if document is not None:
+            document_path = _save_law_document(section_name, law_title, document)
+        _append_legal_regulation(
+            section_name,
+            law_title,
+            article_entries,
+        )
+    except Exception as exc:
+        if document_path and os.path.isfile(document_path):
+            os.remove(document_path)
+        st.error(f"Data belum tersimpan: {exc}")
+        return
+
+    cached_loader = globals().get("load_law_sheet")
+    if cached_loader is not None:
+        cached_loader.clear()
+    st.success(
+        "Dasar hukum berhasil disimpan."
+        + (" Dokumen PDF juga berhasil disimpan." if document is not None else "")
+    )
+    st.rerun()
+
+
 @st.dialog("Dokumen Dasar Hukum", width="large")
 def _show_law_document_dialog() -> None:
     document_path = st.session_state.get("law_document_path")
@@ -774,12 +1000,24 @@ def _show_law_document_dialog() -> None:
     )
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=30)
 def load_law_sheet(sheet_name: str) -> tuple[pd.DataFrame, str | None]:
     sheet_url = _get_sheet_url()
     match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", sheet_url or "")
     if not match:
         return pd.DataFrame(), "URL Google Sheets tidak valid atau belum dikonfigurasi."
+
+    credentials = st.secrets.get("gcp_service_account") if "gcp_service_account" in st.secrets else None
+    if credentials:
+        try:
+            import gspread
+
+            client = gspread.service_account_from_dict(dict(credentials))
+            worksheet = client.open_by_key(match.group(1)).worksheet(sheet_name)
+            values = worksheet.get_all_values()
+            return pd.DataFrame(values), None
+        except Exception:
+            pass
 
     sheet_csv_url = (
         f"https://docs.google.com/spreadsheets/d/{match.group(1)}/gviz/tq"
@@ -806,6 +1044,18 @@ def _normalize_law_search_text(value: str) -> list[str]:
         normalized = normalized.replace(phrase, expanded)
     normalized = re.sub(r"\bno\.?\b", "nomor", normalized)
     return re.findall(r"[a-z0-9]+", normalized)
+
+
+def _is_article_header(value: str) -> bool:
+    normalized = str(value).strip()
+    return bool(
+        "pasal" in normalized.casefold()
+        or re.fullmatch(
+            r"\d+[a-z]?(?:\s+ayat\s*\(\d+\))?(?:\s+.*)?",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def _search_legal_titles(query: str) -> list[tuple[str, str]]:
@@ -958,6 +1208,13 @@ if st.session_state.app_section == "legal":
     st.title("Dasar Hukum / Peraturan")
     st.write("Daftar dasar hukum dan peraturan yang menjadi acuan monitoring HHI.")
 
+    if st.button(
+        "➕ Tambah Dasar Hukum / Peraturan",
+        type="primary",
+        use_container_width=True,
+    ):
+        _show_add_legal_data_dialog()
+
     search_query = st.text_input(
         "Cari Undang-Undang / Peraturan",
         placeholder="Contoh: UU Nomor 23, peraturan, atau tahun",
@@ -1084,14 +1341,40 @@ if selected_law_section in LEGAL_SHEETS:
             for row_index, law_title in law_rows:
                 with st.expander(law_title, expanded=law_title == selected_law_title):
                     document_path = _get_law_document_path(selected_law_section, law_title)
-                    if document_path and st.button(
-                        "Lihat Dokumen",
-                        key=f"view_law_document_{selected_law_section}_{row_index}",
-                        use_container_width=True,
-                    ):
-                        st.session_state.law_document_path = document_path
-                        st.session_state.law_document_title = law_title
-                        _show_law_document_dialog()
+                    if document_path:
+                        if st.button(
+                            "Lihat Dokumen",
+                            key=f"view_law_document_{selected_law_section}_{row_index}",
+                            use_container_width=True,
+                        ):
+                            st.session_state.law_document_path = document_path
+                            st.session_state.law_document_title = law_title
+                            _show_law_document_dialog()
+                    else:
+                        st.caption("Dokumen peraturan ini belum tersedia.")
+                        uploaded_document = st.file_uploader(
+                            "Upload dokumen PDF",
+                            type=["pdf"],
+                            accept_multiple_files=False,
+                            key=f"upload_law_document_{selected_law_section}_{row_index}",
+                        )
+                        if st.button(
+                            "Simpan Dokumen",
+                            key=f"save_law_document_{selected_law_section}_{row_index}",
+                            disabled=uploaded_document is None,
+                            use_container_width=True,
+                        ):
+                            try:
+                                _save_law_document(
+                                    selected_law_section,
+                                    law_title,
+                                    uploaded_document,
+                                )
+                            except (FileExistsError, OSError, ValueError) as exc:
+                                st.error(str(exc))
+                            else:
+                                st.success("Dokumen berhasil diunggah.")
+                                st.rerun()
 
                     article_headers = (
                         law_sheet.iloc[row_index - 1, 1:]
@@ -1103,7 +1386,7 @@ if selected_law_section in LEGAL_SHEETS:
                     for column_index, raw_header in enumerate(article_headers, start=1):
                         header = str(raw_header).strip()
                         content = str(law_sheet.iat[row_index, column_index]).strip()
-                        if not header or "pasal" not in header.lower():
+                        if not header or not _is_article_header(header):
                             if content:
                                 st.markdown("**Ringkasan**")
                                 st.write(content)
