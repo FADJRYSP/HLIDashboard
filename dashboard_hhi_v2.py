@@ -875,6 +875,160 @@ def _append_legal_regulation(
     )
 
 
+def _get_legal_worksheet(section_name: str):
+    credentials = st.secrets.get("gcp_service_account") if "gcp_service_account" in st.secrets else None
+    if not credentials:
+        raise ValueError(
+            "Kredensial tulis belum dikonfigurasi. Tambahkan [gcp_service_account] "
+            "di Streamlit secrets dan beri akun tersebut akses Editor ke spreadsheet."
+        )
+    import gspread
+
+    sheet_url = _get_sheet_url()
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", sheet_url or "")
+    if not match:
+        raise ValueError("URL Google Sheets tidak valid.")
+    client = gspread.service_account_from_dict(dict(credentials))
+    return client.open_by_key(match.group(1)).worksheet(LEGAL_SHEETS[section_name])
+
+
+def _update_legal_regulation(
+    section_name: str,
+    row_index: int,
+    law_title: str,
+    article_entries: list[tuple[str, str]],
+) -> None:
+    worksheet = _get_legal_worksheet(section_name)
+    existing_values = worksheet.get_all_values()
+    content_row_number = row_index + 1
+    header_row_number = max(1, content_row_number - 1)
+    column_count = max(
+        len(article_entries) + 1,
+        len(existing_values[row_index]) if row_index < len(existing_values) else 1,
+        len(existing_values[row_index - 1]) if row_index > 0 else 1,
+    )
+    header_row = (
+        list(existing_values[row_index - 1])
+        if row_index > 0 and row_index - 1 < len(existing_values)
+        else []
+    )
+    content_row = (
+        list(existing_values[row_index])
+        if row_index < len(existing_values)
+        else []
+    )
+    header_row += [""] * (column_count - len(header_row))
+    content_row += [""] * (column_count - len(content_row))
+    content_row[0] = law_title
+    article_columns = [
+        index
+        for index, header in enumerate(header_row[1:], start=1)
+        if _is_article_header(str(header).strip())
+    ]
+    article_columns += list(
+        range(len(article_columns) + 1, len(article_entries) + 1)
+    )
+    for index, (article_title, article_summary) in zip(article_columns, article_entries):
+        header_row[index] = article_title
+        content_row[index] = article_summary
+
+    end_column = ""
+    column_number = column_count
+    while column_number:
+        column_number, remainder = divmod(column_number - 1, 26)
+        end_column = chr(65 + remainder) + end_column
+    worksheet.update(
+        range_name=f"A{header_row_number}:{end_column}{content_row_number}",
+        values=[header_row, content_row],
+        value_input_option="USER_ENTERED",
+    )
+
+
+def _delete_legal_regulation(section_name: str, row_index: int, law_title: str) -> None:
+    worksheet = _get_legal_worksheet(section_name)
+    worksheet.delete_rows(max(1, row_index), row_index + 1)
+    document_path = _get_law_document_path(section_name, law_title)
+    if document_path and os.path.isfile(document_path):
+        os.remove(document_path)
+
+
+@st.dialog("Edit Dasar Hukum / Peraturan", width="large")
+def _show_edit_legal_data_dialog(
+    section_name: str,
+    row_index: int,
+    law_title: str,
+    law_sheet: pd.DataFrame,
+) -> None:
+    current_headers = (
+        law_sheet.iloc[row_index - 1, 1:]
+        if row_index > 0
+        else pd.Series(dtype=str)
+    )
+    current_values = law_sheet.iloc[row_index, 1:]
+    article_entries = [
+        (
+            str(header).strip(),
+            str(current_values.iloc[index]).strip(),
+        )
+        for index, header in enumerate(current_headers)
+        if _is_article_header(str(header).strip())
+    ]
+    if not article_entries:
+        article_entries = [("", "")]
+
+    with st.form("edit_legal_data_form"):
+        edited_title = st.text_input("Nama hukum/peraturan", value=law_title)
+        edited_entries: list[tuple[str, str]] = []
+        for index, (article_title, article_summary) in enumerate(article_entries):
+            pasal_column, summary_column = st.columns([1, 3])
+            with pasal_column:
+                edited_article_title = st.text_input(
+                    "Pasal",
+                    value=article_title,
+                    key=f"edit_law_article_title_{section_name}_{row_index}_{index}",
+                )
+            with summary_column:
+                edited_article_summary = st.text_area(
+                    "Ringkasan/Isi Pasal",
+                    value=article_summary,
+                    height=100,
+                    key=f"edit_law_article_summary_{section_name}_{row_index}_{index}",
+                )
+            edited_entries.append(
+                (edited_article_title.strip(), edited_article_summary.strip())
+            )
+        submitted = st.form_submit_button(
+            "Simpan Perubahan",
+            type="primary",
+            use_container_width=True,
+        )
+
+    if not submitted:
+        return
+    edited_title = edited_title.strip()
+    edited_entries = [
+        (title, summary)
+        for title, summary in edited_entries
+        if title or summary
+    ]
+    if not edited_title or any(not title or not summary for title, summary in edited_entries):
+        st.error("Nama, Pasal, dan Ringkasan/Isi Pasal wajib diisi.")
+        return
+    try:
+        _update_legal_regulation(
+            section_name,
+            row_index,
+            edited_title,
+            edited_entries,
+        )
+    except Exception as exc:
+        st.error(f"Perubahan belum tersimpan: {exc}")
+        return
+    load_law_sheet.clear()
+    st.success("Peraturan berhasil diperbarui.")
+    st.rerun()
+
+
 @st.dialog("Tambah Dasar Hukum / Peraturan", width="large")
 def _show_add_legal_data_dialog() -> None:
     section_name = st.selectbox("Kelompok peraturan", list(LEGAL_SHEETS))
@@ -1340,6 +1494,69 @@ if selected_law_section in LEGAL_SHEETS:
             selected_law_title = st.session_state.get("selected_law_title")
             for row_index, law_title in law_rows:
                 with st.expander(law_title, expanded=law_title == selected_law_title):
+                    action_column, _ = st.columns([1, 4])
+                    with action_column:
+                        edit_column, delete_column = st.columns(2)
+                        if edit_column.button(
+                            "Edit",
+                            key=f"edit_law_{selected_law_section}_{row_index}",
+                            use_container_width=True,
+                        ):
+                            _show_edit_legal_data_dialog(
+                                selected_law_section,
+                                row_index,
+                                law_title,
+                                law_sheet,
+                            )
+                        if delete_column.button(
+                            "Hapus",
+                            key=f"delete_law_{selected_law_section}_{row_index}",
+                            use_container_width=True,
+                        ):
+                            st.session_state.pending_legal_delete = (
+                                selected_law_section,
+                                row_index,
+                                law_title,
+                            )
+                            st.rerun()
+
+                    pending_delete = st.session_state.get("pending_legal_delete")
+                    if pending_delete and pending_delete[0:2] == (
+                        selected_law_section,
+                        row_index,
+                    ):
+                        st.warning(
+                            f"Yakin ingin menghapus **{law_title}** beserta isi Pasalnya "
+                            "dan file PDF terkait?"
+                        )
+                        confirm_column, cancel_column = st.columns(2)
+                        if confirm_column.button(
+                            "Ya, Hapus Permanen",
+                            key=f"confirm_delete_law_{selected_law_section}_{row_index}",
+                            type="primary",
+                            use_container_width=True,
+                        ):
+                            try:
+                                _delete_legal_regulation(
+                                    selected_law_section,
+                                    row_index,
+                                    law_title,
+                                )
+                            except Exception as exc:
+                                st.error(f"Peraturan belum terhapus: {exc}")
+                            else:
+                                st.session_state.pop("pending_legal_delete", None)
+                                load_law_sheet.clear()
+                                st.success("Peraturan berhasil dihapus.")
+                                st.rerun()
+                        if cancel_column.button(
+                            "Batal",
+                            key=f"cancel_delete_law_{selected_law_section}_{row_index}",
+                            use_container_width=True,
+                        ):
+                            st.session_state.pop("pending_legal_delete", None)
+                            st.rerun()
+
                     document_path = _get_law_document_path(selected_law_section, law_title)
                     if document_path:
                         if st.button(
