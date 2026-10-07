@@ -56,6 +56,30 @@ def _get_sheet_url() -> str:
     )
 
 
+@st.cache_resource
+def _get_gspread_spreadsheet():
+    """Reuse the authenticated spreadsheet connection across Streamlit reruns."""
+    credentials = (
+        st.secrets.get("gcp_service_account")
+        if "gcp_service_account" in st.secrets
+        else None
+    )
+    if not credentials:
+        return None
+
+    import gspread
+
+    match = re.search(
+        r"/spreadsheets/d/([a-zA-Z0-9-_]+)",
+        _get_sheet_url() or "",
+    )
+    if not match:
+        return None
+
+    client = gspread.service_account_from_dict(dict(credentials))
+    return client.open_by_key(match.group(1))
+
+
 KAI_NAVY = "#2D2A70"
 KAI_ORANGE = "#E46A00"
 KAI_SLATE = "#5E6A7D"
@@ -1161,13 +1185,12 @@ def load_law_sheet(sheet_name: str) -> tuple[pd.DataFrame, str | None]:
     if not match:
         return pd.DataFrame(), "URL Google Sheets tidak valid atau belum dikonfigurasi."
 
-    credentials = st.secrets.get("gcp_service_account") if "gcp_service_account" in st.secrets else None
-    if credentials:
+    if "gcp_service_account" in st.secrets:
         try:
-            import gspread
-
-            client = gspread.service_account_from_dict(dict(credentials))
-            worksheet = client.open_by_key(match.group(1)).worksheet(sheet_name)
+            spreadsheet = _get_gspread_spreadsheet()
+            if spreadsheet is None:
+                raise ValueError("Koneksi Google Sheets belum tersedia.")
+            worksheet = spreadsheet.worksheet(sheet_name)
             values = worksheet.get_all_values()
             return pd.DataFrame(values), None
         except Exception:
@@ -1344,36 +1367,201 @@ if st.session_state.app_section == "legal":
             z-index: 1;
             max-width: 1600px !important;
             width: 96vw !important;
-            padding-top: 2.5rem;
-            padding-bottom: 3rem;
+            padding-top: 1.5rem;
+            padding-bottom: 4rem;
         }}
-        [data-testid="stMain"] h1 {{ font-size: 2.5rem; }}
-        [data-testid="stTextInput"] label {{ font-size: 1rem; }}
-        [data-testid="stTextInput"] input {{ min-height: 52px; font-size: 1rem; }}
+        [data-testid="stHorizontalBlock"]:has([data-testid="stTextInput"]) {{
+            position: relative;
+            overflow: hidden;
+            width: 100vw;
+            min-width: 100vw;
+            box-sizing: border-box;
+            left: 50%;
+            margin-left: 0;
+            transform: translateX(-50%);
+            padding: .4rem 6vw .48rem;
+            margin-bottom: .85rem;
+            border-radius: 0;
+            align-items: center;
+            color: #FFFFFF;
+            background: linear-gradient(120deg, #27235F 0%, #3E3A91 62%, #E46A00 145%);
+            box-shadow: 0 10px 24px rgba(45,42,112,.16);
+        }}
+        [data-testid="stHorizontalBlock"]:has([data-testid="stTextInput"])::after {{
+            content: "";
+            position: absolute;
+            width: 190px;
+            height: 190px;
+            right: -45px;
+            top: -105px;
+            border: 25px solid rgba(255,255,255,.10);
+            border-radius: 50%;
+        }}
+        .legal-header-copy {{
+            position: relative;
+            z-index: 1;
+        }}
+        .legal-eyebrow {{
+            position: relative;
+            z-index: 1;
+            color: #FFB66D;
+            font-size: .56rem;
+            font-weight: 800;
+            letter-spacing: .14em;
+            text-transform: uppercase;
+        }}
+        .legal-header-copy h1 {{
+            position: relative;
+            z-index: 1;
+            margin: .04rem 0 .04rem;
+            color: #FFFFFF;
+            font-size: clamp(1.05rem, 1.65vw, 1.4rem);
+            font-weight: 850;
+        }}
+        .legal-header-copy p {{
+            position: relative;
+            z-index: 1;
+            margin: 0;
+            color: rgba(255,255,255,.82);
+            font-size: .64rem;
+        }}
+        .legal-stat {{
+            padding: 1rem 1.1rem;
+            border: 1px solid #E2E7F0;
+            border-radius: 16px;
+            background: rgba(255,255,255,.86);
+            box-shadow: 0 8px 20px rgba(45,42,112,.07);
+        }}
+        .legal-stat-label {{ color: #718096; font-size: .76rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }}
+        .legal-stat-value {{ color: #2D2A70; font-size: 1.7rem; font-weight: 850; line-height: 1.1; margin-top: .25rem; }}
+        [data-testid="stHorizontalBlock"]:has([data-testid="stTextInput"]) [data-testid="stTextInput"] {{
+            position: relative;
+            z-index: 2;
+            width: 100%;
+            margin: 0;
+        }}
+        [data-testid="stTextInput"] label {{ font-size: .78rem; font-weight: 700; color: rgba(255,255,255,.9); }}
+        [data-testid="stTextInput"] input {{
+            min-height: 42px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,.5);
+            background: rgba(255,255,255,.96);
+        }}
         [data-testid="stMain"] .stButton > button {{
-            min-height: 64px;
-            font-size: 1rem;
+            min-height: 56px;
+            border-radius: 12px;
+            font-size: .95rem;
             font-weight: 700;
+            border: 1px solid #D8DEEA;
+            box-shadow: 0 4px 10px rgba(45,42,112,.06);
+            transition: transform .18s ease, box-shadow .18s ease, background .18s ease;
+        }}
+        [data-testid="stMain"] .stButton > button:hover {{
+            transform: translateY(-2px);
+            box-shadow: 0 9px 18px rgba(45,42,112,.13);
+        }}
+        [data-testid="stMain"] [data-testid="stHorizontalBlock"] {{
+            gap: .85rem;
+        }}
+        [role="dialog"] {{
+            border: 1px solid #DCE2EE;
+            border-radius: 20px;
+            box-shadow: 0 22px 60px rgba(25,31,58,.28);
+            overflow: hidden;
+            position: relative;
+        }}
+        [role="dialog"] button[aria-label="Close"],
+        [role="dialog"] [data-testid="stDialogCloseButton"] {{
+            position: absolute !important;
+            top: .7rem !important;
+            right: .8rem !important;
+            z-index: 100 !important;
+            width: 2.25rem !important;
+            min-width: 2.25rem !important;
+            height: 2.25rem !important;
+            min-height: 2.25rem !important;
+            padding: 0 !important;
+            border-radius: 50% !important;
+            color: #475569 !important;
+            background: #F1F5F9 !important;
+            border: 1px solid #D8E0EB !important;
+            pointer-events: auto !important;
+            cursor: pointer !important;
+        }}
+        [role="dialog"] button[aria-label="Close"]:hover,
+        [role="dialog"] [data-testid="stDialogCloseButton"]:hover {{
+            color: #FFFFFF !important;
+            background: #2D2A70 !important;
+            border-color: #2D2A70 !important;
+        }}
+        [role="dialog"] h2 {{
+            color: #2D2A70;
+            font-size: 1.35rem;
+            font-weight: 850;
+        }}
+        [role="dialog"] [data-testid="stTextInput"] label,
+        [role="dialog"] [data-testid="stTextArea"] label,
+        [role="dialog"] [data-testid="stSelectbox"] label,
+        [role="dialog"] [data-testid="stNumberInput"] label {{
+            color: #475569;
+            font-size: .82rem;
+            font-weight: 750;
+        }}
+        [role="dialog"] [data-testid="stTextInput"] input,
+        [role="dialog"] [data-testid="stTextArea"] textarea,
+        [role="dialog"] [data-testid="stNumberInput"] input {{
+            border-radius: 10px;
+            border: 1px solid #D5DCE8;
+            background: #F8FAFD;
+        }}
+        [role="dialog"] [data-testid="stFileUploader"] {{
+            padding: .8rem;
+            border: 1px dashed #BFCBE0;
+            border-radius: 12px;
+            background: #F8FAFD;
+        }}
+        [role="dialog"] [data-testid="stFormSubmitButton"] button {{
+            min-height: 46px;
+            border-radius: 11px;
+            color: #FFFFFF !important;
+            background: linear-gradient(135deg, #E46A00, #F28B35) !important;
+            border: 0;
+            font-weight: 800;
+            box-shadow: 0 6px 14px rgba(228,106,0,.23);
+        }}
+        [role="dialog"] [data-testid="stHorizontalBlock"]:has([data-testid="stTextInput"]) {{
+            position: static;
+            overflow: visible;
+            width: auto;
+            min-width: 0;
+            margin: 0;
+            padding: 0;
+            transform: none;
+            background: transparent;
+            box-shadow: none;
         }}
         </style>
         """,
         unsafe_allow_html=True,
     )
-    st.title("Dasar Hukum / Peraturan")
-    st.write("Daftar dasar hukum dan peraturan yang menjadi acuan monitoring HHI.")
-
-    if st.button(
-        "➕ Tambah Dasar Hukum / Peraturan",
-        type="primary",
-        use_container_width=True,
-    ):
-        _show_add_legal_data_dialog()
-
-    search_query = st.text_input(
-        "Cari Undang-Undang / Peraturan",
-        placeholder="Contoh: UU Nomor 23, peraturan, atau tahun",
-        key="legal_title_search",
-    )
+    header_copy, header_search = st.columns([1.35, 1])
+    with header_copy:
+        st.markdown(
+            """
+            <div class="legal-header-copy">
+                <div class="legal-eyebrow">Pusat Referensi HHI</div>
+                <h1>Dasar Hukum / Peraturan</h1>
+                <p>Kelola dan telusuri regulasi yang menjadi landasan monitoring HHI PT KAI.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with header_search:
+        search_query = st.text_input(
+            "Cari peraturan",
+            placeholder="Cari UU, peraturan, atau tahun...",
+            key="legal_title_search",
+        )
     if search_query.strip():
         with st.spinner("Mencari nama hukum/peraturan..."):
             search_results = _search_legal_titles(search_query)
@@ -1394,10 +1582,37 @@ if st.session_state.app_section == "legal":
         else:
             st.info("Tidak ditemukan. Coba kata kunci yang lebih singkat.")
 
+    if st.button(
+        "➕ Tambah Dasar Hukum / Peraturan",
+        type="primary",
+        use_container_width=True,
+    ):
+        _show_add_legal_data_dialog()
+
+    st.markdown("### Pilih kelompok peraturan")
+    legal_counts = {}
+    for section_name, sheet_name in LEGAL_SHEETS.items():
+        legal_sheet, _ = load_law_sheet(sheet_name)
+        legal_counts[section_name] = sum(
+            str(value).strip().casefold().startswith(LAW_TITLE_PREFIXES)
+            for value in legal_sheet.iloc[:, 0]
+        ) if not legal_sheet.empty and legal_sheet.shape[1] else 0
     legal_columns = st.columns(3)
     for index, section_name in enumerate(LEGAL_SHEETS):
+        with legal_columns[index % 3]:
+            st.markdown(
+                f"""
+                <div style="padding:.85rem 1rem .25rem;border:1px solid #E2E7F0;
+                border-radius:16px 16px 0 0;background:linear-gradient(135deg,#FFFFFF,#F5F7FC);
+                color:#2D2A70;font-weight:800;font-size:.93rem;">
+                    {section_name}
+                    <span style="float:right;color:#E46A00;">{legal_counts[section_name]}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
         if legal_columns[index % 3].button(
-            section_name,
+            "Buka kelompok",
             key=f"open_law_section_{index}",
             use_container_width=True,
         ):
@@ -1439,16 +1654,224 @@ if selected_law_section in LEGAL_SHEETS:
             z-index: 1;
             max-width: 1600px !important;
             width: 96vw !important;
-            padding-top: 2rem;
+            padding-top: 1.25rem;
             padding-bottom: 3rem;
         }}
-        [data-testid="stMain"] h1 {{ font-size: 2.5rem; }}
-        [data-testid="stExpander"] summary p {{ font-size: 1.08rem; font-weight: 700; }}
+        [data-testid="stMain"] .stButton > button {{
+            min-height: 46px;
+            border-radius: 11px;
+            border: 1px solid #D9DFEB;
+            font-weight: 700;
+            transition: transform .18s ease, box-shadow .18s ease;
+        }}
+        [data-testid="stMain"] .stButton > button:hover {{
+            transform: translateY(-1px);
+            box-shadow: 0 7px 16px rgba(45,42,112,.12);
+        }}
+        .law-detail-hero {{
+            margin: .85rem 0 1.25rem;
+            padding: 1.35rem 1.6rem;
+            border-radius: 18px;
+            color: #FFFFFF;
+            background: linear-gradient(120deg, #27235F 0%, #3E3A91 70%, #E46A00 150%);
+            box-shadow: 0 12px 26px rgba(45,42,112,.15);
+        }}
+        .law-detail-kicker {{
+            color: #FFB66D;
+            font-size: .72rem;
+            font-weight: 800;
+            letter-spacing: .12em;
+            text-transform: uppercase;
+        }}
+        .law-detail-hero h1 {{
+            margin: .3rem 0 .25rem;
+            color: #FFFFFF;
+            font-size: clamp(1.55rem, 2.6vw, 2.25rem);
+            font-weight: 850;
+        }}
+        .law-detail-hero p {{
+            margin: 0;
+            color: rgba(255,255,255,.78);
+            font-size: .86rem;
+        }}
+        [data-testid="stExpander"] {{
+            margin: .7rem 0;
+            border: 1px solid #DCE2EE;
+            border-radius: 14px;
+            background: rgba(255,255,255,.88);
+            box-shadow: 0 5px 14px rgba(45,42,112,.06);
+            overflow: hidden;
+        }}
+        [data-testid="stExpander"]:hover {{
+            border-color: #B9C4DD;
+            box-shadow: 0 9px 20px rgba(45,42,112,.1);
+        }}
+        [data-testid="stExpander"] summary {{
+            padding: .9rem 1rem;
+            background: linear-gradient(135deg, #FFFFFF, #F7F8FC);
+        }}
+        [data-testid="stExpander"] summary p {{ font-size: 1rem; font-weight: 750; color: #30364A; }}
+        [data-testid="stExpander"] > details > div {{
+            padding: 1rem 1.1rem 1.25rem;
+            background: rgba(255,255,255,.9);
+        }}
         [data-testid="stExpander"] [data-testid="stMarkdownContainer"] p {{
             font-size: 1rem;
             line-height: 1.55;
+            color: #4B5565;
+            margin-bottom: .8rem;
         }}
-        [data-testid="stMain"] .stButton > button {{ min-height: 56px; font-size: 1rem; }}
+        [data-testid="stExpander"] [data-testid="stMarkdownContainer"] h3 {{
+            color: #2D2A70;
+            border-bottom: 2px solid #F0A15E;
+            padding-bottom: .35rem;
+        }}
+        [data-testid="stExpander"] [data-testid="stMarkdownContainer"] strong {{
+            color: #2D2A70;
+            font-weight: 800;
+        }}
+        [data-testid="stExpander"] [data-testid="stCaptionContainer"] {{
+            color: #7A8496;
+            font-size: .82rem;
+        }}
+        [data-testid="stExpander"] [data-testid="stFileUploader"] {{
+            margin-top: .45rem;
+            padding: .65rem;
+            border: 1px dashed #C8D2E5;
+            border-radius: 12px;
+            background: #F8FAFD;
+        }}
+        [data-testid="stExpander"] [data-testid="stAlert"] {{
+            border-radius: 12px;
+            border-left: 4px solid #E46A00;
+        }}
+        [data-testid="stExpander"] [data-testid="stHorizontalBlock"] {{
+            gap: .65rem;
+            align-items: center;
+        }}
+        [data-testid="stExpander"] .stButton > button {{
+            min-height: 42px;
+            font-size: .86rem;
+        }}
+        [data-testid="stExpander"] .stButton > button[aria-label^="Edit"],
+        [data-testid="stExpander"] .stButton > button:has(+ button[aria-label^="Hapus"]) {{
+            color: #FFFFFF;
+            background: #2D6CDF;
+            border-color: #2D6CDF;
+        }}
+        [data-testid="stExpander"] .stButton > button[aria-label^="Edit"]:hover,
+        [data-testid="stExpander"] .stButton > button:has(+ button[aria-label^="Hapus"]):hover {{
+            color: #FFFFFF;
+            background: #1E4FA8;
+            border-color: #1E4FA8;
+        }}
+        [data-testid="stExpander"] .stButton > button[aria-label^="Hapus"] {{
+            color: #FFFFFF;
+            background: #C83F45;
+            border-color: #C83F45;
+        }}
+        [data-testid="stExpander"] .stButton > button[aria-label^="Hapus"]:hover {{
+            color: #FFFFFF;
+            background: #982D35;
+            border-color: #982D35;
+        }}
+        [data-testid="stExpander"] [data-testid="stHorizontalBlock"] [data-testid="stHorizontalBlock"] > div:first-child .stButton > button {{
+            color: #FFFFFF !important;
+            background: linear-gradient(135deg, #2563EB, #4F8DF7) !important;
+            border-color: #2563EB !important;
+            box-shadow: 0 5px 12px rgba(37,99,235,.24);
+        }}
+        [data-testid="stExpander"] [data-testid="stHorizontalBlock"] [data-testid="stHorizontalBlock"] > div:first-child .stButton > button:hover {{
+            color: #FFFFFF !important;
+            background: linear-gradient(135deg, #1D4ED8, #2563EB) !important;
+            border-color: #1D4ED8 !important;
+            box-shadow: 0 7px 16px rgba(37,99,235,.35);
+        }}
+        [data-testid="stExpander"] [data-testid="stHorizontalBlock"] [data-testid="stHorizontalBlock"] > div:nth-child(2) .stButton > button {{
+            color: #FFFFFF !important;
+            background: linear-gradient(135deg, #DC3545, #F05A66) !important;
+            border-color: #DC3545 !important;
+            box-shadow: 0 5px 12px rgba(220,53,69,.24);
+        }}
+        [data-testid="stExpander"] [data-testid="stHorizontalBlock"] [data-testid="stHorizontalBlock"] > div:nth-child(2) .stButton > button:hover {{
+            color: #FFFFFF !important;
+            background: linear-gradient(135deg, #B91C2A, #DC3545) !important;
+            border-color: #B91C2A !important;
+            box-shadow: 0 7px 16px rgba(220,53,69,.35);
+        }}
+        [data-testid="stExpander"] [data-testid="stHorizontalBlock"] [data-testid="stHorizontalBlock"] .stButton > button p {{
+            color: #FFFFFF !important;
+        }}
+        [data-testid="stExpander"] .stButton > button[kind="primary"] {{
+            background: #C83F45;
+            border-color: #C83F45;
+        }}
+        [data-testid="stExpander"] [data-testid="stMarkdownContainer"] + [data-testid="stMarkdownContainer"] {{
+            border-top: 1px solid #EDF0F5;
+            padding-top: .55rem;
+        }}
+        [role="dialog"] {{
+            border: 1px solid #DCE2EE;
+            border-radius: 20px;
+            box-shadow: 0 22px 60px rgba(25,31,58,.28);
+            overflow: hidden;
+        }}
+        [role="dialog"] > div {{
+            background: #FFFFFF;
+        }}
+        [role="dialog"] h2 {{
+            color: #2D2A70;
+            font-size: 1.35rem;
+            font-weight: 850;
+        }}
+        [role="dialog"] [data-testid="stCaptionContainer"] {{
+            color: #7A8496;
+        }}
+        [role="dialog"] [data-testid="stTextInput"] input,
+        [role="dialog"] [data-testid="stTextArea"] textarea,
+        [role="dialog"] [data-testid="stSelectbox"] [data-baseweb="select"],
+        [role="dialog"] [data-testid="stNumberInput"] input {{
+            border-radius: 10px;
+            border: 1px solid #D5DCE8;
+            background: #F8FAFD;
+        }}
+        [role="dialog"] [data-testid="stTextInput"] input:focus,
+        [role="dialog"] [data-testid="stTextArea"] textarea:focus {{
+            border-color: #4F8DF7;
+            box-shadow: 0 0 0 2px rgba(79,141,247,.14);
+        }}
+        [role="dialog"] [data-testid="stTextArea"] textarea {{
+            min-height: 96px;
+        }}
+        [role="dialog"] [data-testid="stFileUploader"] {{
+            padding: .8rem;
+            border: 1px dashed #BFCBE0;
+            border-radius: 12px;
+            background: #F8FAFD;
+        }}
+        [role="dialog"] [data-testid="stFormSubmitButton"] button {{
+            min-height: 46px;
+            border-radius: 11px;
+            color: #FFFFFF !important;
+            background: linear-gradient(135deg, #E46A00, #F28B35) !important;
+            border: 0;
+            font-weight: 800;
+            box-shadow: 0 6px 14px rgba(228,106,0,.23);
+        }}
+        [role="dialog"] [data-testid="stFormSubmitButton"] button:hover {{
+            background: linear-gradient(135deg, #C95700, #E46A00) !important;
+        }}
+        [role="dialog"] [data-testid="stHorizontalBlock"]:has([data-testid="stTextInput"]) {{
+            position: static;
+            overflow: visible;
+            width: auto;
+            min-width: 0;
+            margin: 0;
+            padding: 0;
+            transform: none;
+            background: transparent;
+            box-shadow: none;
+        }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -1458,8 +1881,16 @@ if selected_law_section in LEGAL_SHEETS:
         st.session_state.app_section = "legal"
         st.rerun()
     sheet_name = LEGAL_SHEETS[selected_law_section]
-    st.title(f"Dasar Hukum / Peraturan {selected_law_section}")
-    st.caption(f"Sumber data: sheet {sheet_name}")
+    st.markdown(
+        f"""
+        <section class="law-detail-hero">
+            <div class="law-detail-kicker">Kelompok regulasi HHI</div>
+            <h1>Dasar Hukum / Peraturan {selected_law_section}</h1>
+            <p>Daftar regulasi, pasal, ringkasan, dan dokumen pendukung · Sumber: {sheet_name}</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
 
     law_sheet, law_error = load_law_sheet(sheet_name)
     if law_error:
