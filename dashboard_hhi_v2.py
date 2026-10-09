@@ -39,7 +39,7 @@ except Exception:
     HAS_REPORTLAB = False
 
 DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/1yvdxDE1lnHAjEJQZlqYZqYlBa_ZjCz1k/edit?usp=sharing&ouid=104405218548143620607&rtpof=true&sd=true"
-KAI_LOGO_URL = "https://images.seeklogo.com/logo-png/40/2/pt-kai-kereta-api-indonesia-2020-logo-png_seeklogo-407558.png"
+KAI_LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/5/56/Logo_PT_Kereta_Api_Indonesia_%28Persero%29_2020.svg"
 
 
 def _get_sheet_url() -> str:
@@ -197,10 +197,22 @@ div[data-testid="metric-container"]{
 
 .sidebar-logo-panel img{
     display:block;
-    width:110px;
+    width:125px;
     height:auto;
     margin:0 auto;
-    transform:translateY(-22px);
+    transform:translateY(-8px);
+}
+
+[data-testid="stSidebar"] .stButton > button{
+    color:#FFFFFF !important;
+    background:#097969 !important;
+    border:1px solid #097969 !important;
+}
+
+[data-testid="stSidebar"] .stButton > button:hover{
+    color:#FFFFFF !important;
+    background:#076456 !important;
+    border-color:#076456 !important;
 }
 
 [data-testid="stSidebar"] *{
@@ -755,6 +767,17 @@ LEGAL_SHEETS = {
     "KJCB": "KJCB",
     "LRT": "LRT",
 }
+
+
+def _open_legal_section(section_name: str, law_title: str | None = None) -> None:
+    """Set legal navigation state before Streamlit reruns the script."""
+    if law_title is None:
+        st.session_state.pop("selected_law_title", None)
+    else:
+        st.session_state.selected_law_title = law_title
+    st.session_state.app_section = f"law:{section_name}"
+
+
 LAW_TITLE_PREFIXES = (
     "undang-undang",
     "undang undang",
@@ -1049,6 +1072,7 @@ def _show_edit_legal_data_dialog(
         st.error(f"Perubahan belum tersimpan: {exc}")
         return
     load_law_sheet.clear()
+    load_law_title_counts.clear()
     st.success("Peraturan berhasil diperbarui.")
     st.rerun()
 
@@ -1148,6 +1172,7 @@ def _show_add_legal_data_dialog() -> None:
     cached_loader = globals().get("load_law_sheet")
     if cached_loader is not None:
         cached_loader.clear()
+    load_law_title_counts.clear()
     st.success(
         "Dasar hukum berhasil disimpan."
         + (" Dokumen PDF juga berhasil disimpan." if document is not None else "")
@@ -1178,7 +1203,7 @@ def _show_law_document_dialog() -> None:
     )
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=300, show_spinner=False)
 def load_law_sheet(sheet_name: str) -> tuple[pd.DataFrame, str | None]:
     sheet_url = _get_sheet_url()
     match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", sheet_url or "")
@@ -1205,6 +1230,45 @@ def load_law_sheet(sheet_name: str) -> tuple[pd.DataFrame, str | None]:
         return sheet, None
     except Exception as exc:
         return pd.DataFrame(), f"Sheet {sheet_name} tidak dapat dibaca: {exc}"
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_law_title_counts() -> dict[str, int]:
+    """Load only column A for the legal landing page counters."""
+    sheet_url = _get_sheet_url()
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", sheet_url or "")
+    counts = {section_name: 0 for section_name in LEGAL_SHEETS}
+    if not match:
+        return counts
+
+    spreadsheet = None
+    if "gcp_service_account" in st.secrets:
+        try:
+            spreadsheet = _get_gspread_spreadsheet()
+        except Exception:
+            spreadsheet = None
+
+    for section_name, sheet_name in LEGAL_SHEETS.items():
+        try:
+            if spreadsheet is not None:
+                titles = spreadsheet.worksheet(sheet_name).col_values(1)
+            else:
+                sheet_csv_url = (
+                    f"https://docs.google.com/spreadsheets/d/{match.group(1)}/gviz/tq"
+                    f"?tqx=out:csv&sheet={quote(sheet_name)}&tq={quote('select A')}"
+                )
+                titles = pd.read_csv(
+                    sheet_csv_url,
+                    header=None,
+                    dtype=str,
+                ).fillna("").iloc[:, 0].tolist()
+            counts[section_name] = sum(
+                str(value).strip().casefold().startswith(LAW_TITLE_PREFIXES)
+                for value in titles
+            )
+        except Exception:
+            counts[section_name] = 0
+    return counts
 
 
 def _normalize_law_search_text(value: str) -> list[str]:
@@ -1270,28 +1334,33 @@ if st.session_state.app_section == "home":
         <style>
         .stApp {
             background-color: #FFFFFF !important;
-            background-image: url("/app/static/kai_home_background.png");
+            background-image: url("/app/static/kai_home_background_v2.png");
             background-repeat: no-repeat;
-            background-position: right 0 top 32px;
-            background-size: auto 100%;
+            background-position: center center;
+            background-size: cover;
         }
         [data-testid="stSidebar"], [data-testid="stSidebarCollapseButton"] { display: none; }
         .block-container {
             max-width: none !important;
             width: 100% !important;
-            min-height: calc(100vh - 2rem);
-            padding: 12vh 0 1.5rem;
+            min-height: 100vh;
+            padding: 2rem 1.5rem;
             display: flex;
             flex-direction: column;
             justify-content: center;
+            align-items: center;
             box-sizing: border-box;
         }
         .kai-home-screen {
-            width: min(54vw, 760px);
-            margin-left: 7vw;
+            width: min(92vw, 760px);
+            margin: 0 auto;
             text-align: center;
-            padding: 8px 16px 20px;
+            padding: 22px 28px 20px;
             box-sizing: border-box;
+            background: transparent;
+            border-radius: 0;
+            box-shadow: none;
+            transform: translateY(9vh);
         }
         .kai-home-logo {
             width: 420px;
@@ -1301,9 +1370,10 @@ if st.session_state.app_section == "home":
         .kai-home-title { color: #20265F; font-size: 2.2rem; font-weight: 800; margin: 18px 0 8px; }
         .kai-home-subtitle { color: #5E6A7D; font-size: 1.1rem; margin: 0; }
         div[data-testid="stHorizontalBlock"] {
-            width: min(54vw, 760px);
-            margin-left: 7vw;
+            width: min(92vw, 760px);
+            margin: 0 auto;
             gap: 18px;
+            transform: translateY(9vh);
         }
         div[data-testid="stHorizontalBlock"] .stButton > button {
             min-height: 68px; border-radius: 8px; font-size: 1.05rem; font-weight: 700;
@@ -1313,17 +1383,18 @@ if st.session_state.app_section == "home":
             color: #FFFFFF; background: #2D2A70; border-color: #2D2A70;
         }
         @media (max-width: 760px) {
-            .stApp { background-size: auto 64vh; background-position: right bottom; }
-            .block-container { justify-content: flex-start; padding-top: 5vh; padding-bottom: 45vh; }
+            .stApp { background-size: cover; background-position: center center; }
+            .block-container { justify-content: center; padding: 1rem .75rem; }
             .kai-home-screen, div[data-testid="stHorizontalBlock"] {
                 width: 92vw;
-                margin-left: 4vw;
+                margin: 0 auto;
+                transform: translateY(5vh);
             }
-            .kai-home-screen { background: rgba(255, 255, 255, 0.78); border-radius: 8px; }
+            .kai-home-screen { padding: 18px 14px; }
             .kai-home-logo { width: 230px; height: 150px; }
         }
         @media (min-width: 761px) and (max-height: 560px) {
-            .block-container { padding-top: 8vh; }
+            .block-container { padding-top: 1rem; padding-bottom: 1rem; }
         }
         </style>
         <div class="kai-home-screen">
@@ -1460,6 +1531,18 @@ if st.session_state.app_section == "legal":
             transform: translateY(-2px);
             box-shadow: 0 9px 18px rgba(45,42,112,.13);
         }}
+        [data-testid="stMain"] .stButton > button[kind="primary"] {{
+            color: #FFFFFF !important;
+            background: #097969 !important;
+            border-color: #097969 !important;
+            box-shadow: 0 4px 10px rgba(9,121,105,.22);
+        }}
+        [data-testid="stMain"] .stButton > button[kind="primary"]:hover {{
+            color: #FFFFFF !important;
+            background: #076456 !important;
+            border-color: #076456 !important;
+            box-shadow: 0 9px 18px rgba(9,121,105,.28);
+        }}
         [data-testid="stMain"] [data-testid="stHorizontalBlock"] {{
             gap: .85rem;
         }}
@@ -1559,26 +1642,25 @@ if st.session_state.app_section == "legal":
     with header_search:
         search_query = st.text_input(
             "Cari peraturan",
-            placeholder="Cari UU, peraturan, atau tahun...",
+            placeholder="Ketik kata kunci lalu tekan Enter...",
             key="legal_title_search",
+            label_visibility="visible",
         )
     if search_query.strip():
-        with st.spinner("Mencari nama hukum/peraturan..."):
-            search_results = _search_legal_titles(search_query)
+        search_results = _search_legal_titles(search_query)
 
         if search_results:
             st.caption(f"Ditemukan {len(search_results)} hasil")
-            for result_index, (section_name, law_title) in enumerate(search_results):
+            for result_index, (section_name, law_title) in enumerate(search_results[:12]):
                 title_column, action_column = st.columns([5, 1])
                 title_column.markdown(f"**{law_title}**")
-                if action_column.button(
+                action_column.button(
                     f"Buka {section_name}",
                     key=f"search_law_result_{result_index}",
                     use_container_width=True,
-                ):
-                    st.session_state.selected_law_title = law_title
-                    st.session_state.app_section = f"law:{section_name}"
-                    st.rerun()
+                    on_click=_open_legal_section,
+                    args=(section_name, law_title),
+                )
         else:
             st.info("Tidak ditemukan. Coba kata kunci yang lebih singkat.")
 
@@ -1590,13 +1672,7 @@ if st.session_state.app_section == "legal":
         _show_add_legal_data_dialog()
 
     st.markdown("### Pilih kelompok peraturan")
-    legal_counts = {}
-    for section_name, sheet_name in LEGAL_SHEETS.items():
-        legal_sheet, _ = load_law_sheet(sheet_name)
-        legal_counts[section_name] = sum(
-            str(value).strip().casefold().startswith(LAW_TITLE_PREFIXES)
-            for value in legal_sheet.iloc[:, 0]
-        ) if not legal_sheet.empty and legal_sheet.shape[1] else 0
+    legal_counts = load_law_title_counts()
     legal_columns = st.columns(3)
     for index, section_name in enumerate(LEGAL_SHEETS):
         with legal_columns[index % 3]:
@@ -1611,14 +1687,13 @@ if st.session_state.app_section == "legal":
                 """,
                 unsafe_allow_html=True,
             )
-        if legal_columns[index % 3].button(
+        legal_columns[index % 3].button(
             "Buka kelompok",
             key=f"open_law_section_{index}",
             use_container_width=True,
-        ):
-            st.session_state.pop("selected_law_title", None)
-            st.session_state.app_section = f"law:{section_name}"
-            st.rerun()
+            on_click=_open_legal_section,
+            args=(section_name,),
+        )
     if st.button("Kembali ke Beranda", type="primary"):
         st.session_state.app_section = "home"
         st.rerun()
@@ -1978,6 +2053,7 @@ if selected_law_section in LEGAL_SHEETS:
                             else:
                                 st.session_state.pop("pending_legal_delete", None)
                                 load_law_sheet.clear()
+                                load_law_title_counts.clear()
                                 st.success("Peraturan berhasil dihapus.")
                                 st.rerun()
                         if cancel_column.button(
@@ -2072,7 +2148,7 @@ if selected_law_section in LEGAL_SHEETS:
 # 📂 LOAD DATA GOOGLE SHEETS
 # ==========================================================
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=60, show_spinner=False)
 def load_data():
     """Load three worksheets from a Google Spreadsheet.
 
@@ -2794,7 +2870,7 @@ def build_resume_pdf_bytes(row: pd.Series, activity_label_col: str | None = None
             KAI_LOGO_URL,
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Referer": "https://seeklogo.com/",
+                "Referer": "https://id.wikipedia.org/",
             },
         )
         logo_data = urlopen(logo_request, timeout=10).read()
@@ -3035,7 +3111,7 @@ def build_resume_html(row: pd.Series, activity_label_col: str | None = None) -> 
     </style>
     <div class="resume-wrap">
             <div class="resume-hero">
-                <div><div class="resume-brand"><img class="resume-logo" src="https://images.seeklogo.com/logo-png/40/2/pt-kai-kereta-api-indonesia-2020-logo-png_seeklogo-407558.png" alt="Logo PT KAI"><div class="resume-kicker">PT KAI · Activity intelligence</div></div><div class="resume-main-title">{title}</div><div class="resume-tag">{klasifikasi}</div></div>
+                <div><div class="resume-brand"><img class="resume-logo" src="{KAI_LOGO_URL}" alt="Logo PT KAI"><div class="resume-kicker">PT KAI · Activity intelligence</div></div><div class="resume-main-title">{title}</div><div class="resume-tag">{klasifikasi}</div></div>
                 <div class="resume-chart"><div class="progress-ring"><strong>{progress_txt}</strong></div><div class="chart-copy"><span class="chart-label">Progress</span><span class="chart-status">{status_txt}</span><div class="progress-track"><div class="progress-fill"></div></div></div></div>
             </div>
       <div class="resume-meta">
@@ -3232,14 +3308,14 @@ df_all = pd.concat(
 
 with st.sidebar:
 
-    if st.button("← Kembali ke Beranda", use_container_width=True):
-        st.session_state.app_section = "home"
-        st.rerun()
-
     st.markdown(
         f'<div class="sidebar-logo-panel"><img src="{KAI_LOGO_URL}" alt="Logo KAI"></div>',
         unsafe_allow_html=True,
     )
+
+    if st.button("← Kembali ke Beranda", use_container_width=True):
+        st.session_state.app_section = "home"
+        st.rerun()
 
     st.header("⚙️ Panel Control")
 
@@ -3327,7 +3403,7 @@ st.markdown(
     f"""
     <div class=\"kai-hero\">
         <div class=\"kai-hero-brand\">
-            <img class=\"kai-logo\" src=\"https://images.seeklogo.com/logo-png/40/2/pt-kai-kereta-api-indonesia-2020-logo-png_seeklogo-407558.png\" alt=\"Logo PT KAI\">
+            <img class=\"kai-logo\" src=\"{KAI_LOGO_URL}\" alt=\"Logo PT KAI\">
             <div>
                 <h2>Dashboard Monitoring HHI - PT KAI</h2>
                 <p>Ringkasan kinerja kegiatan untuk kebutuhan monitoring manajemen.</p>
