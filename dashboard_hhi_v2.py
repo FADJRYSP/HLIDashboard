@@ -778,6 +778,28 @@ def _open_legal_section(section_name: str, law_title: str | None = None) -> None
     st.session_state.app_section = f"law:{section_name}"
 
 
+@st.dialog("SUCCESS", width="small")
+def _show_legal_success_modal(message: str) -> None:
+    st.markdown(
+        f"""
+        <div style="text-align:center;padding:.5rem 0 1rem;">
+            <img src="/app/static/legal_success_check.svg"
+                 alt="Berhasil" style="width:68px;height:68px;object-fit:contain;">
+            <p style="color:#374151;font-size:.95rem;line-height:1.45;">
+                {html_lib.escape(message)}
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _show_pending_legal_success() -> None:
+    success_message = st.session_state.pop("legal_success_message", None)
+    if success_message:
+        _show_legal_success_modal(success_message)
+
+
 LAW_TITLE_PREFIXES = (
     "undang-undang",
     "undang undang",
@@ -1073,8 +1095,10 @@ def _show_edit_legal_data_dialog(
         return
     load_law_sheet.clear()
     load_law_title_counts.clear()
-    st.success("Peraturan berhasil diperbarui.")
-    st.rerun()
+    st.session_state.legal_success_message = (
+        "Dasar hukum/peraturan berhasil diedit dan perubahan di terapkan."
+    )
+    st.rerun(scope="app")
 
 
 @st.dialog("Tambah Dasar Hukum / Peraturan", width="large")
@@ -1173,11 +1197,10 @@ def _show_add_legal_data_dialog() -> None:
     if cached_loader is not None:
         cached_loader.clear()
     load_law_title_counts.clear()
-    st.success(
-        "Dasar hukum berhasil disimpan."
-        + (" Dokumen PDF juga berhasil disimpan." if document is not None else "")
+    st.session_state.legal_success_message = (
+        "Dasar hukum/peraturan baru berhasil ditambahkan."
     )
-    st.rerun()
+    st.rerun(scope="app")
 
 
 @st.dialog("Dokumen Dasar Hukum", width="large")
@@ -1415,6 +1438,7 @@ if st.session_state.app_section == "home":
     st.stop()
 
 if st.session_state.app_section == "legal":
+    _show_pending_legal_success()
     st.markdown(
         f"""
         <style>
@@ -1577,6 +1601,10 @@ if st.session_state.app_section == "legal":
             background: #2D2A70 !important;
             border-color: #2D2A70 !important;
         }}
+        [role="dialog"] button[aria-label="Close"],
+        [role="dialog"] [data-testid="stDialogCloseButton"] {{
+            z-index: 1000001 !important;
+        }}
         [role="dialog"] h2 {{
             color: #2D2A70;
             font-size: 1.35rem;
@@ -1596,12 +1624,58 @@ if st.session_state.app_section == "legal":
             border-radius: 10px;
             border: 1px solid #D5DCE8;
             background: #F8FAFD;
+            color: #111827 !important;
+            caret-color: #111827 !important;
         }}
         [role="dialog"] [data-testid="stFileUploader"] {{
             padding: .8rem;
             border: 1px dashed #BFCBE0;
             border-radius: 12px;
             background: #F8FAFD;
+        }}
+        .legal-success-overlay {{
+            position: fixed;
+            inset: 0;
+            z-index: 999999;
+            display: grid;
+            place-items: center;
+            padding: 1.25rem;
+            background: rgba(15, 23, 42, .28);
+            pointer-events: none;
+        }}
+        .legal-success-modal {{
+            width: min(430px, 92vw);
+            padding: 2rem 1.75rem 1.8rem;
+            border-radius: 22px;
+            background: #FFFFFF;
+            box-shadow: 0 24px 70px rgba(15, 23, 42, .28);
+            text-align: center;
+            pointer-events: none;
+        }}
+        .legal-success-modal img {{
+            display: block;
+            width: 68px;
+            height: 68px;
+            margin: 0 auto .85rem;
+            object-fit: contain;
+            image-rendering: auto;
+        }}
+        .legal-success-title {{
+            color: #16A34A;
+            font-size: 1.05rem;
+            font-weight: 850;
+            letter-spacing: .04em;
+        }}
+        .legal-success-modal p {{
+            margin: .8rem 0 0;
+            color: #374151;
+            font-size: .95rem;
+            line-height: 1.45;
+        }}
+        .legal-success-modal .legal-success-note {{
+            margin-top: .25rem;
+            color: #7A8496;
+            font-size: .82rem;
         }}
         [role="dialog"] [data-testid="stFormSubmitButton"] button {{
             min-height: 46px;
@@ -1706,6 +1780,7 @@ elif st.session_state.app_section.startswith("law:"):
     selected_law_section = st.session_state.app_section.split(":", 1)[1]
 
 if selected_law_section in LEGAL_SHEETS:
+    _show_pending_legal_success()
     st.markdown(
         f"""
         <style>
@@ -1878,6 +1953,7 @@ if selected_law_section in LEGAL_SHEETS:
             color: #FFFFFF !important;
         }}
         [data-testid="stExpander"] .stButton > button[kind="primary"] {{
+            color: #FFFFFF !important;
             background: #C83F45;
             border-color: #C83F45;
         }}
@@ -1909,6 +1985,8 @@ if selected_law_section in LEGAL_SHEETS:
             border-radius: 10px;
             border: 1px solid #D5DCE8;
             background: #F8FAFD;
+            color: #111827 !important;
+            caret-color: #111827 !important;
         }}
         [role="dialog"] [data-testid="stTextInput"] input:focus,
         [role="dialog"] [data-testid="stTextArea"] textarea:focus {{
@@ -2054,7 +2132,9 @@ if selected_law_section in LEGAL_SHEETS:
                                 st.session_state.pop("pending_legal_delete", None)
                                 load_law_sheet.clear()
                                 load_law_title_counts.clear()
-                                st.success("Peraturan berhasil dihapus.")
+                                st.session_state.legal_success_message = (
+                                    "Dasar hukum/peraturan berhasil dihapus."
+                                )
                                 st.rerun()
                         if cancel_column.button(
                             "Batal",
@@ -2097,7 +2177,9 @@ if selected_law_section in LEGAL_SHEETS:
                             except (FileExistsError, OSError, ValueError) as exc:
                                 st.error(str(exc))
                             else:
-                                st.success("Dokumen berhasil diunggah.")
+                                st.session_state.legal_success_message = (
+                                    "Dokumen peraturan berhasil diunggah."
+                                )
                                 st.rerun()
 
                     article_headers = (
